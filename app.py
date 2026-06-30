@@ -1293,7 +1293,7 @@ def main():
 
     # تشغيل Flask API
     app = create_flask_app(bot)
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 7860))
 
     if app:
         print(f"\n🌐 الواجهة + API يعملان على: http://localhost:{port}")
