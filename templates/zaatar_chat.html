@@ -1,1 +1,959 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>زعتر v3 — LSTM · Transformer · BPE</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
+:root {
+  --bg:       #0d0d14;
+  --surface:  #13131f;
+  --surface2: #1a1730;
+  --border:   #2a1a4e;
+  --purple:   #8b2fc9;
+  --pink:     #f0249e;
+  --accent:   #b06ef3;
+  --text:     #e0d7ff;
+  --muted:    #6a5d8a;
+  --green:    #4cff91;
+  --radius:   16px;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px;
+}
+
+/* ── خلفية متحركة ── */
+.bg-canvas {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse at 20% 20%, rgba(139,47,201,0.06) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 80%, rgba(240,36,158,0.05) 0%, transparent 60%);
+}
+.bg-grid {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(rgba(176,110,243,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(176,110,243,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* ── Layout ── */
+.page { position: relative; z-index: 1; width: 100%; max-width: 980px; }
+
+.page-header {
+  text-align: center;
+  padding: 24px 0 20px;
+}
+.page-header h1 {
+  font-size: 32px;
+  font-weight: 900;
+  background: linear-gradient(135deg, var(--accent), var(--pink));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: -1px;
+}
+.page-header p {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+.arch-pills {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0;
+}
+.arch-pill {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--accent);
+}
+
+/* ── Main Grid ── */
+.main-grid {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+/* ── Chat Panel ── */
+.chat-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  height: 600px;
+  overflow: hidden;
+  box-shadow: 0 0 40px rgba(139,47,201,0.1);
+}
+
+.chat-header {
+  background: linear-gradient(135deg, var(--purple), var(--pink));
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.avatar {
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.15);
+  border: 2px solid rgba(255,255,255,0.3);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px;
+}
+.header-info { flex: 1; }
+.header-info h2 { font-size: 15px; font-weight: 700; }
+.header-info small { font-size: 11px; opacity: 0.8; }
+
+.api-status {
+  font-size: 10px;
+  padding: 3px 9px;
+  border-radius: 10px;
+  font-weight: 600;
+  background: rgba(255,255,255,0.15);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.api-status:hover { background: rgba(255,255,255,0.25); }
+.api-status.online { color: var(--green); }
+.api-status.offline { color: #ff6b6b; }
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.msg {
+  max-width: 80%;
+  padding: 11px 15px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  line-height: 1.6;
+  animation: msgIn 0.25s ease;
+}
+@keyframes msgIn {
+  from { opacity:0; transform:translateY(8px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+.msg.bot {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  align-self: flex-start;
+  border-bottom-right-radius: 4px;
+}
+.msg.user {
+  background: linear-gradient(135deg, var(--purple), var(--pink));
+  align-self: flex-end;
+  border-bottom-left-radius: 4px;
+}
+.msg .tags {
+  margin-top: 7px;
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.tag {
+  background: rgba(176,110,243,0.12);
+  border: 1px solid rgba(176,110,243,0.2);
+  border-radius: 8px;
+  padding: 2px 7px;
+  font-size: 10px;
+  color: var(--accent);
+}
+.tag.high { border-color: rgba(76,255,145,0.3); color: var(--green); }
+.tag.low  { border-color: rgba(255,107,107,0.3); color: #ff8a8a; }
+
+.typing-wrap {
+  padding: 0 16px 6px;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.typing-wrap.show { display: flex; }
+.typing-dots {
+  display: flex; gap: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  padding: 9px 14px;
+  border-radius: 14px;
+  border-bottom-right-radius: 4px;
+}
+.dot {
+  width: 7px; height: 7px;
+  background: var(--accent);
+  border-radius: 50%;
+  animation: dotBounce 1.3s infinite;
+}
+.dot:nth-child(2) { animation-delay:.15s; }
+.dot:nth-child(3) { animation-delay:.3s; background: var(--pink); }
+@keyframes dotBounce {
+  0%,80%,100% { transform:translateY(0); }
+  40% { transform:translateY(-6px); }
+}
+
+.chips {
+  padding: 8px 14px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.chip {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 5px 11px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--accent);
+  transition: all .2s;
+  user-select: none;
+}
+.chip:hover {
+  background: linear-gradient(135deg, var(--purple), var(--pink));
+  color: white;
+  border-color: transparent;
+}
+
+.input-row {
+  padding: 12px 14px;
+  background: var(--bg);
+  border-top: 1px solid var(--surface2);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+#userInput {
+  flex: 1;
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  border-radius: 24px;
+  padding: 10px 18px;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  direction: rtl;
+  transition: border-color .2s, box-shadow .2s;
+}
+#userInput:focus {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px rgba(139,47,201,.15);
+}
+#userInput::placeholder { color: var(--muted); }
+
+.send-btn {
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--purple), var(--pink));
+  border: none;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  transition: transform .2s, box-shadow .2s;
+}
+.send-btn:hover {
+  transform: scale(1.08);
+  box-shadow: 0 4px 16px rgba(176,110,243,.4);
+}
+
+/* ── Side Panel ── */
+.side-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.card-header {
+  padding: 12px 16px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.card-body { padding: 14px 16px; }
+
+/* Status Card */
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.status-row:last-child { border-bottom: none; }
+.status-val {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+/* Architecture Viz */
+.arch-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+}
+.arch-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--surface2);
+  border-radius: 8px;
+  border-right: 2px solid var(--border);
+  transition: border-color .2s;
+}
+.arch-node.active { border-color: var(--accent); }
+.arch-node .node-icon { font-size: 14px; }
+.arch-node .node-name { font-weight: 600; color: var(--text); }
+.arch-node .node-desc { color: var(--muted); font-size: 10px; margin-top: 1px; }
+.arch-arrow { text-align: center; color: var(--muted); font-size: 12px; }
+
+/* Attention Heatmap */
+.attn-grid {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+}
+.attn-cell {
+  height: 18px;
+  border-radius: 3px;
+  background: var(--surface2);
+  transition: background .3s;
+}
+
+/* Memory */
+.mem-entry {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.mem-entry:last-child { border-bottom: none; }
+.mem-u { color: var(--accent); }
+.mem-b { color: var(--text); }
+
+/* Learn Form */
+.learn-form input, .learn-form select {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: var(--text);
+  font-size: 12px;
+  margin-bottom: 8px;
+  outline: none;
+  direction: rtl;
+}
+.learn-form input:focus { border-color: var(--purple); }
+.learn-btn {
+  width: 100%;
+  background: linear-gradient(135deg, var(--purple), var(--pink));
+  border: none;
+  border-radius: 8px;
+  padding: 8px;
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity .2s;
+}
+.learn-btn:hover { opacity: .85; }
+
+/* Confidence Bar */
+.conf-bar-wrap { margin-top: 4px; }
+.conf-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--purple), var(--pink));
+  transition: width .5s ease;
+}
+.conf-label { font-size: 10px; color: var(--muted); margin-bottom: 2px; }
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(60px);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 20px;
+  font-size: 13px;
+  z-index: 100;
+  transition: transform .3s;
+}
+.toast.show { transform: translateX(-50%) translateY(0); }
+
+@media (max-width: 700px) {
+  .main-grid { grid-template-columns: 1fr; }
+  .side-panel { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="bg-canvas"></div>
+<div class="bg-grid"></div>
+
+<div class="page">
+
+  <!-- Header -->
+  <div class="page-header">
+    <h1>🌿 زعتر v3</h1>
+    <p>محرك ذكاء اصطناعي مبني من الصفر بـ Python</p>
+    <div class="arch-pills">
+      <span class="arch-pill">✅ LSTM</span>
+      <span class="arch-pill">✅ Bidirectional</span>
+      <span class="arch-pill">✅ Multi-Head Attention</span>
+      <span class="arch-pill">✅ Transformer</span>
+      <span class="arch-pill">✅ BPE Tokenizer</span>
+      <span class="arch-pill">✅ Flask API</span>
+      <span class="arch-pill">✅ Save/Load</span>
+    </div>
+  </div>
+
+  <div class="main-grid">
+
+    <!-- ══ CHAT PANEL ══ -->
+    <div class="chat-panel">
+
+      <div class="chat-header">
+        <div class="avatar">🌿</div>
+        <div class="header-info">
+          <h2>زعتر v3</h2>
+          <small>LSTM · BiRNN · Transformer · BPE</small>
+        </div>
+        <span class="api-status offline" id="apiStatus" onclick="checkAPI()">⬤ offline</span>
+      </div>
+
+      <div class="messages" id="messages">
+        <div class="msg bot">
+          مرحباً! أنا <strong>زعتر v3</strong> 🌿<br>
+          أستخدم الآن: <em>LSTM + Transformer + BPE</em><br><br>
+          <strong>للاتصال بـ Python:</strong><br>
+          شغّل <code>python AI_ENGINE_Zaatar_v3.py</code><br>
+          ثم اضغط "فحص API" ←
+          <div class="tags">
+            <span class="tag">Flask API</span>
+            <span class="tag">Context Memory</span>
+            <span class="tag">Attention Maps</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="typing-wrap" id="typingWrap">
+        <div class="typing-dots">
+          <div class="dot"></div>
+          <div class="dot"></div>
+          <div class="dot"></div>
+        </div>
+      </div>
+
+      <div class="chips">
+        <span class="chip" onclick="q('مرحبا')">👋 مرحبا</span>
+        <span class="chip" onclick="q('من أنت')">🤖 من أنت</span>
+        <span class="chip" onclick="q('شكرا')">🙏 شكرا</span>
+        <span class="chip" onclick="q('مع السلامة')">✌️ وداع</span>
+        <span class="chip" onclick="q('كيف تعمل')">⚙️ كيف تعمل</span>
+        <span class="chip" onclick="checkAPI()">🔌 فحص API</span>
+      </div>
+
+      <div class="input-row">
+        <button class="send-btn" onclick="send()">➤</button>
+        <input type="text" id="userInput"
+               placeholder="اكتب رسالتك هنا..."
+               onkeydown="if(event.key==='Enter')send()">
+      </div>
+    </div>
+
+    <!-- ══ SIDE PANEL ══ -->
+    <div class="side-panel">
+
+      <!-- Status -->
+      <div class="card">
+        <div class="card-header">📊 حالة النموذج</div>
+        <div class="card-body" id="statusBody">
+          <div class="status-row">
+            <span>الحالة</span>
+            <span class="status-val" id="sStatus">—</span>
+          </div>
+          <div class="status-row">
+            <span>حجم المفردات (BPE)</span>
+            <span class="status-val" id="sVocab">—</span>
+          </div>
+          <div class="status-row">
+            <span>عمليات الدمج</span>
+            <span class="status-val" id="sMerges">—</span>
+          </div>
+          <div class="status-row">
+            <span>الذاكرة</span>
+            <span class="status-val" id="sMemory">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Architecture Flow -->
+      <div class="card">
+        <div class="card-header">🏗️ المعمارية</div>
+        <div class="card-body">
+          <div class="arch-flow">
+            <div class="arch-node" id="node-bpe">
+              <span class="node-icon">🔤</span>
+              <div>
+                <div class="node-name">BPE Tokenizer</div>
+                <div class="node-desc">تقسيم الكلمات لوحدات</div>
+              </div>
+            </div>
+            <div class="arch-arrow">↓</div>
+            <div class="arch-node" id="node-embed">
+              <span class="node-icon">🎯</span>
+              <div>
+                <div class="node-name">Embedding Layer</div>
+                <div class="node-desc">كل token → متجه 32D</div>
+              </div>
+            </div>
+            <div class="arch-arrow">↓</div>
+            <div class="arch-node" id="node-transformer">
+              <span class="node-icon">⚡</span>
+              <div>
+                <div class="node-name">Transformer Block</div>
+                <div class="node-desc">Multi-Head Attention (4 رؤوس)</div>
+              </div>
+            </div>
+            <div class="arch-arrow">↓</div>
+            <div class="arch-node" id="node-bilstm">
+              <span class="node-icon">🔄</span>
+              <div>
+                <div class="node-name">BiLSTM</div>
+                <div class="node-desc">قراءة من الاتجاهين</div>
+              </div>
+            </div>
+            <div class="arch-arrow">↓</div>
+            <div class="arch-node" id="node-ctx">
+              <span class="node-icon">🧠</span>
+              <div>
+                <div class="node-name">Context Fusion</div>
+                <div class="node-desc">دمج ذاكرة المحادثة</div>
+              </div>
+            </div>
+            <div class="arch-arrow">↓</div>
+            <div class="arch-node" id="node-out">
+              <span class="node-icon">🎯</span>
+              <div>
+                <div class="node-name">Softmax Output</div>
+                <div class="node-desc">احتمالات النوايا</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Attention Heatmap -->
+      <div class="card">
+        <div class="card-header">🔥 خريطة الانتباه</div>
+        <div class="card-body">
+          <div id="attnInfo" style="font-size:11px;color:var(--muted);margin-bottom:8px">
+            أرسل رسالة لعرض خريطة الانتباه
+          </div>
+          <div id="attnGrid" class="attn-grid" style="grid-template-columns: repeat(8, 1fr)">
+          </div>
+        </div>
+      </div>
+
+      <!-- Memory -->
+      <div class="card">
+        <div class="card-header">
+          💬 الذاكرة
+          <span style="margin-right:auto;cursor:pointer;font-size:10px;color:var(--muted)" onclick="clearMemory()">مسح ✕</span>
+        </div>
+        <div class="card-body" id="memoryBody">
+          <div style="font-size:11px;color:var(--muted)">لا توجد محادثات بعد</div>
+        </div>
+      </div>
+
+      <!-- Learn -->
+      <div class="card">
+        <div class="card-header">🧠 تعليم زعتر</div>
+        <div class="card-body">
+          <div class="learn-form">
+            <input type="text" id="learnText" placeholder="الجملة الجديدة...">
+            <select id="learnIntent">
+              <option value="0">0 — ترحيب (greeting)</option>
+              <option value="1">1 — وداع (goodbye)</option>
+              <option value="2">2 — هوية (identity)</option>
+              <option value="3">3 — شكر (thanks)</option>
+            </select>
+            <button class="learn-btn" onclick="learnNew()">تعلّم الجملة 🧠</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// إعدادات الـ API
+// ═══════════════════════════════════════════════════════
+const API = "";  // مسار نسبي — يعمل تلقائياً على أي سيرفر يستضيف الصفحة
+let apiOnline = false;
+let lastMessage = "";
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// محاكاة ذكية للنموذج (وضع Offline)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const LOCAL = {
+  intents:   {0:"greeting", 1:"goodbye", 2:"identity", 3:"thanks"},
+  intentAR:  {0:"ترحيب", 1:"وداع", 2:"هوية", 3:"شكر"},
+  responses: {
+    0: ["أهلاً بك! كيف يمكنني مساعدتك؟","يا هلا! 🌿","مرحباً، سعيد بتواصلك!"],
+    1: ["إلى اللقاء! 👋","مع السلامة، يوم رائع! 🌿","وداعاً، عد متى شئت!"],
+    2: ["أنا زعتر v3 🧠 — مبني بـ LSTM + Transformer + BPE من الصفر!",
+        "اسمي زعتر، محرك ذكاء اصطناعي يفهم ترتيب الكلمات ويتذكر السياق."],
+    3: ["العفو! 😊","لا شكر على واجب 🌿","في خدمتك دائماً!"]
+  },
+  vocab: {
+    "مرحبا":0,"هلا":0,"السلام":0,"كيف":0,"صباح":0,"مساء":0,"اهلا":0,"هاي":0,
+    "مع":1,"السلامة":1,"وداعا":1,"باي":1,"اللقاء":1,"انتهى":1,"يلا":1,
+    "من":2,"اسمك":2,"انت":2,"نفسك":2,"هوية":2,"كيف تعمل":2,"صنعك":2,
+    "شكرا":3,"يعطيك":3,"تسلم":3,"الف":3,"ممنون":3,"مشكور":3
+  },
+  memory: [],
+
+  predict(text) {
+    const words = text.trim().split(/\s+/);
+    let h = [0,0,0,0];
+    // محاكاة BiLSTM: scan من الاتجاهين
+    for (let t=0; t<words.length; t++) {
+      const decay_fwd = Math.pow(0.85, words.length-1-t);
+      const decay_bwd = Math.pow(0.85, t);
+      const w = words[t];
+      if (this.vocab[w] !== undefined) {
+        h[this.vocab[w]] += 1.2 * (decay_fwd + decay_bwd) / 2;
+      }
+    }
+    // Context bias
+    if (this.memory.length > 0) {
+      h[this.memory[this.memory.length-1].intent] += 0.15;
+    }
+    const mx  = Math.max(...h);
+    const exp = h.map(v => Math.exp(v - mx));
+    const sum = exp.reduce((a,b)=>a+b, 0);
+    const p   = exp.map(e=>e/sum);
+    const idx = p.indexOf(Math.max(...p));
+    return { intent: idx, confidence: p[idx], probs: p };
+  },
+
+  chat(text) {
+    const r    = this.predict(text);
+    const resp = this.responses[r.intent];
+    const reply = resp[Math.floor(Math.random()*resp.length)];
+    this.memory.push({user:text, bot:reply, intent:r.intent, conf:r.confidence});
+    if (this.memory.length > 5) this.memory.shift();
+    return { reply, intent_id:r.intent, intent_name:this.intents[r.intent],
+             confidence:r.confidence, memory_size:this.memory.length };
+  }
+};
+
+// ═══════════════════════════════════════════════════════
+// API Functions
+// ═══════════════════════════════════════════════════════
+
+async function checkAPI() {
+  try {
+    const res = await fetch(`${API}/status`, { signal: AbortSignal.timeout(2000) });
+    const data = await res.json();
+    apiOnline = true;
+    document.getElementById("apiStatus").className = "api-status online";
+    document.getElementById("apiStatus").textContent = "⬤ online";
+    updateStatus(data);
+    toast("✅ متصل بـ Flask API!");
+  } catch {
+    apiOnline = false;
+    document.getElementById("apiStatus").className = "api-status offline";
+    document.getElementById("apiStatus").textContent = "⬤ offline";
+    toast("⚠️ API غير متاح — وضع محاكاة محلية");
+  }
+}
+
+function updateStatus(data) {
+  document.getElementById("sStatus").textContent  = data.trained ? "✅ مدرَّب" : "⏳ غير مدرب";
+  document.getElementById("sVocab").textContent   = data.vocab_size || "—";
+  document.getElementById("sMerges").textContent  = data.bpe_merges || "—";
+  document.getElementById("sMemory").textContent  = `${data.memory_len || 0} رسائل`;
+}
+
+async function fetchAttention(message) {
+  if (!apiOnline) return;
+  try {
+    const res  = await fetch(`${API}/attention`, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({message})
+    });
+    const data = await res.json();
+    if (data.attention_matrix) renderAttention(data.attention_matrix, message);
+  } catch {}
+}
+
+function renderAttention(matrix, msg) {
+  const grid   = document.getElementById("attnGrid");
+  const info   = document.getElementById("attnInfo");
+  const words  = msg.split(" ").slice(0, 8);
+  const n      = Math.min(words.length, 8);
+  grid.style.gridTemplateColumns = `repeat(${n}, 1fr)`;
+  grid.innerHTML = "";
+  info.textContent = `خريطة انتباه: ${msg}`;
+
+  // نأخذ sub-matrix n×n
+  const sub = matrix.slice(0, n).map(row => row.slice(0, n));
+  const flat = sub.flat();
+  const mx   = Math.max(...flat) || 1;
+
+  for (let i=0; i<n; i++) {
+    for (let j=0; j<n; j++) {
+      const v    = sub[i][j] / mx;
+      const cell = document.createElement("div");
+      cell.className = "attn-cell";
+      const r = Math.round(139 * v + 26 * (1-v));
+      const g = Math.round(47  * v);
+      const b = Math.round(201 * v + 48 * (1-v));
+      cell.style.background = `rgb(${r},${g},${b})`;
+      cell.title = `${words[i]||""}→${words[j]||""}: ${v.toFixed(2)}`;
+      grid.appendChild(cell);
+    }
+  }
+}
+
+function updateMemoryPanel(history) {
+  const body = document.getElementById("memoryBody");
+  if (!history || history.length === 0) {
+    body.innerHTML = '<div style="font-size:11px;color:var(--muted)">لا توجد محادثات بعد</div>';
+    return;
+  }
+  body.innerHTML = history.slice(-4).map(h => `
+    <div class="mem-entry">
+      <div class="mem-u">أنت: ${h.user}</div>
+      <div class="mem-b">زعتر: ${h.bot.slice(0,50)}${h.bot.length>50?'...':''}</div>
+    </div>
+  `).join("");
+}
+
+async function clearMemory() {
+  if (apiOnline) {
+    await fetch(`${API}/memory`, {method:"DELETE"});
+  } else {
+    LOCAL.memory = [];
+  }
+  updateMemoryPanel([]);
+  toast("🗑️ تم مسح الذاكرة");
+}
+
+async function learnNew() {
+  const text   = document.getElementById("learnText").value.trim();
+  const intent = parseInt(document.getElementById("learnIntent").value);
+  if (!text) { toast("⚠️ أدخل الجملة أولاً"); return; }
+
+  if (apiOnline) {
+    try {
+      const res  = await fetch(`${API}/learn`, {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({text, intent})
+      });
+      const data = await res.json();
+      toast(`✅ تعلم: "${text}" → ${data.intent}`);
+    } catch { toast("❌ خطأ في التعلم"); }
+  } else {
+    LOCAL.vocab[text.split(" ")[0]] = intent;
+    toast(`✅ تعلم محلياً: "${text}"`);
+  }
+  document.getElementById("learnText").value = "";
+}
+
+// ═══════════════════════════════════════════════════════
+// Chat Functions
+// ═══════════════════════════════════════════════════════
+
+function addMsg(text, role, tags=[]) {
+  const msgs = document.getElementById("messages");
+  const div  = document.createElement("div");
+  div.className = `msg ${role}`;
+
+  const tagHtml = tags.length ? `<div class="tags">${tags.map(t =>
+    `<span class="tag ${t.cls||''}">${t.text}</span>`
+  ).join("")}</div>` : "";
+
+  div.innerHTML = text + tagHtml;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  return div;
+}
+
+function setTyping(show) {
+  document.getElementById("typingWrap").classList.toggle("show", show);
+}
+
+function animateArch(nodes) {
+  nodes.forEach((id, i) => {
+    setTimeout(() => {
+      document.querySelectorAll(".arch-node").forEach(n => n.classList.remove("active"));
+      document.getElementById(id)?.classList.add("active");
+    }, i * 180);
+  });
+}
+
+async function send() {
+  const input = document.getElementById("userInput");
+  const text  = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  lastMessage = text;
+
+  addMsg(text, "user");
+  setTyping(true);
+
+  // تحريك المعمارية
+  animateArch(["node-bpe","node-embed","node-transformer","node-bilstm","node-ctx","node-out"]);
+
+  const delay = 500 + Math.random() * 400;
+
+  if (apiOnline) {
+    // ━━ وضع API الحقيقي ━━
+    try {
+      const res  = await fetch(`${API}/chat`, {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({message: text})
+      });
+      const data = await res.json();
+
+      setTimeout(async () => {
+        setTyping(false);
+        const conf    = (data.confidence * 100).toFixed(1);
+        const confCls = data.confidence > 0.6 ? "high" : data.confidence < 0.3 ? "low" : "";
+        addMsg(data.reply, "bot", [
+          {text: `النية: ${data.intent_name}`, cls:""},
+          {text: `ثقة: ${conf}%`, cls: confCls},
+          {text: `ذاكرة: ${data.memory_size}`, cls:""},
+          {text: "API ✓", cls:""}
+        ]);
+
+        // تحديث الذاكرة والانتباه
+        const memRes = await fetch(`${API}/memory`);
+        const memData = await memRes.json();
+        updateMemoryPanel(memData.history);
+        fetchAttention(text);
+
+        // تحديث الـ status
+        const stRes = await fetch(`${API}/status`);
+        updateStatus(await stRes.json());
+      }, delay);
+
+    } catch(e) {
+      setTyping(false);
+      addMsg("❌ خطأ في الاتصال بالـ API", "bot");
+      apiOnline = false;
+      checkAPI();
+    }
+
+  } else {
+    // ━━ وضع محاكاة محلية ━━
+    setTimeout(() => {
+      setTyping(false);
+      const data = LOCAL.chat(text);
+      const conf = (data.confidence * 100).toFixed(1);
+      const confCls = data.confidence > 0.6 ? "high" : data.confidence < 0.3 ? "low" : "";
+
+      // محاكاة خريطة انتباه عشوائية
+      const n = Math.min(text.split(" ").length, 8);
+      const fakeMatrix = Array.from({length:n}, () =>
+        Array.from({length:n}, () => Math.random())
+      );
+      renderAttention(fakeMatrix, text);
+      updateMemoryPanel(LOCAL.memory);
+
+      addMsg(data.reply, "bot", [
+        {text: `النية: ${LOCAL.intentAR[data.intent_id]}`},
+        {text: `ثقة: ${conf}%`, cls: confCls},
+        {text: `ذاكرة: ${data.memory_size}`},
+        {text: "محاكاة محلية"}
+      ]);
+    }, delay);
+  }
+}
+
+function q(text) {
+  document.getElementById("userInput").value = text;
+  send();
+}
+
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2800);
+}
+
+// ═══════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════
+checkAPI();
+setInterval(checkAPI, 30000);  // فحص كل 30 ثانية
+</script>
+</body>
+</html>
